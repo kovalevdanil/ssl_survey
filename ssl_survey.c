@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "task.h"
+#include "skan.h"
 
 void usage(char *program_name)
 {
@@ -111,17 +112,35 @@ task_t *parse_args(int argc, char **argv)
         }
     }
 
+    if (task->output == NULL)
+        task->output = stdout;
+
     return task;
 }
-
-void perform_task(task_t *task);
 
 int main(int argc, char *argv[])
 {
     task_t *task = parse_args(argc, argv);
-    perform_task(task);
-    task_free(task);
+    skan_init();
 
+    int ret;
+    for (int i = 0; i < task->count; i++)
+    {
+        ret = skan_domain(task->hostnames[i], task->output);
+        if (ret == -1)
+        {
+            fprintf(stderr, "An error occured on hostname %s\n", task -> hostnames[i]);
+            break;
+        }
+
+        if (task -> output != stdout)
+            print_progress(20, i + 1, task -> count);
+        else 
+            printf("[%d/%d]", i + 1, task -> count);
+    }
+    printf("\n");
+
+    task_free(task);
+    skan_free();
     return 0;
 }
-

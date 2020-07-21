@@ -46,6 +46,8 @@ int task_read_hostnames(task_t *task, FILE *fp)
 
     while (getline(&line, &size, fp) != -1)
     {
+        if (line[strlen(line) - 1] == '\n')
+            line[strlen(line) - 1] = '\0';
         task_add_hostname(task, line);
         free(line);
         line = NULL;
