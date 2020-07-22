@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include <string.h>
 
-#include "skan.h"
+#include "scan.h"
 
 #define PORT "443"
 
@@ -158,7 +158,7 @@ const char *get_max_tls_version(SSL_CTX *ctx, char *domain)
     return version;
 }
 
-void skan_init()
+void scan_init()
 {
     SSL_load_error_strings();
     SSL_library_init();
@@ -179,16 +179,16 @@ void skan_init()
     inited = 1;
 }
 
-void skan_free()
+void scan_free()
 {
     if (ctx != NULL)
         SSL_CTX_free(ctx);
 }
 
-int skan_domain(char *domain, FILE *output)
+int scan_domain(char *domain, FILE *output)
 {
     if (inited == 0)
-        skan_init();
+        scan_init();
 
     const char *max_tls_version = get_max_tls_version(ctx, domain);
 
