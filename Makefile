@@ -1,7 +1,8 @@
 all: ssl_survey
 
 CC = gcc -g
-LIBS = `pkg-config --libs openssl`
+LIBS = `pkg-config --cflags --libs  openssl`
+TRUST_STORE = /etc/ssl/certs/ca-certificates.crt
 
 ssl_survey: ssl_survey.o task.o scan.o
 	$(CC) $^ -o ssl_survey $(LIBS)
@@ -13,7 +14,7 @@ task.o: task.c task.h
 	$(CC) -c task.c
 
 scan.o: scan.c scan.h
-	$(CC) -c scan.c
+	$(CC) -DTRUST_STORE=\"$(TRUST_STORE)\" -c scan.c
 
 clean:
 	rm -rf *.o

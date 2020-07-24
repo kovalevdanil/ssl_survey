@@ -170,11 +170,13 @@ void scan_init()
         exit(EXIT_FAILURE);
     }
 
-    if (!SSL_CTX_load_verify_locations(ctx, "/etc/ssl/certs/ca-certificates.crt", NULL))
+#ifdef TRUST_STORE
+     if (!SSL_CTX_load_verify_locations(ctx, TRUST_STORE, NULL))
     {
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
     }
+#endif
 
     inited = 1;
 }
