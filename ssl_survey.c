@@ -75,7 +75,7 @@ task_t *parse_args(int argc, char **argv)
                 if (task_set_output(task, fp) == -1)
                 {
                     fclose(fp);
-                    failure("An error occured");
+                    failure("An error occurred");
                 }
                 i++;
             }
@@ -93,7 +93,7 @@ task_t *parse_args(int argc, char **argv)
                 }
 
                 if (task_read_hostnames(task, fp) == -1)
-                    failure("An error occured");
+                    failure("An error occurred");
                 i++;
             }
             else
@@ -126,17 +126,16 @@ int main(int argc, char *argv[])
     int ret;
     for (int i = 0; i < task->count; i++)
     {
-        ret = scan_domain(task->hostnames[i], task->output);
+        ret = scan_domain2(task->hostnames[i], task->output);
         if (ret == -1)
         {
-            fprintf(stderr, "An error occured on hostname %s\n", task -> hostnames[i]);
-            break;
+            continue;
         }
 
         if (task -> output != stdout)
             print_progress(20, i + 1, task -> count);
         else 
-            printf("[%d/%d]", i + 1, task -> count);
+            printf("[%d/%d]\n", i + 1, task -> count);
     }
     printf("\n");
 

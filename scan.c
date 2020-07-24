@@ -9,161 +9,50 @@
 #include <string.h>
 
 #include "scan.h"
+#include "strbuf.h"
 
 #define PORT "443"
 
 static int inited = 0;
-static SSL_CTX *ctx = NULL;
+static SSL_CTX *ctx_tls = NULL,
+               *ctx_tlsv_1 = NULL,
+               *ctx_tlsv_1_1 = NULL,
+               *ctx_tlsv_1_2 = NULL;
 
-in_addr_t get_addr(char *domain)
+
+BIO *BIO_create(SSL_CTX *ctx, char *hostname)
 {
-    char *protocol = strstr(domain, "://");
-    if (protocol != NULL)
-        domain = protocol + 3;
+    char name[1024] = "";
 
-    struct hostent *host = gethostbyname(domain);
-
-    if (host == NULL)
-        exit(EXIT_FAILURE);
-
-    return *(in_addr_t *)host->h_addr_list[0];
-}
-
-int connect_to(char *domain, const char *port)
-{
-    struct sockaddr_in addr;
-
-    int sfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sfd == -1)
-        return -1;
-
-    memset(&addr, 0, sizeof(struct sockaddr_in));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = get_addr(domain);
-    addr.sin_port = htons(atoi(port));
-
-    int ret = connect(sfd, (struct sockaddr *)&addr, sizeof(addr));
-
-    return ret == -1 ? -1 : sfd;
-}
-
-int get_pubkey_bits(SSL *ssl)
-{
-    X509 *cert = SSL_get_peer_certificate(ssl);
-    int bits = EVP_PKEY_bits(X509_get_pubkey(cert));
-    // X509_free(cert); ??
-    return bits;
-}
-
-int get_domain_pubkey_bits(SSL_CTX *ctx, char *domain)
-{
-    int fd, bits;
-    fd = connect_to(domain, PORT);
-
-    if (fd == -1)
-        return -1;
-
-    SSL *ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, fd);
-    if (SSL_connect(ssl) != 1)
-        return -1;
-
-    bits = get_pubkey_bits(ssl);
-
-    SSL_shutdown(ssl);
-    SSL_free(ssl);
-    close(fd);
-
-    return bits;
-}
-
-void print_available_ciphers(SSL_CTX *ctx, char *domain, FILE *output)
-{
-    STACK_OF(SSL_CIPHER) *sk_cipher = SSL_CTX_get_ciphers(ctx);
-    int cipher_num = sk_SSL_CIPHER_num(sk_cipher);
-
-    const char *name;
-    int count = 0;
-    const SSL_CIPHER *current_cipher;
     SSL *ssl;
-    int fd;
+    BIO *bio;
 
-    for (; count < cipher_num; count++)
-    {
-        current_cipher = sk_SSL_CIPHER_value(sk_cipher, count);
-        name = SSL_CIPHER_get_name(current_cipher);
-        ssl = SSL_new(ctx);
-        fd = connect_to(domain, PORT);
-        if (fd == -1)
-            return;
+    bio = BIO_new_ssl_connect(ctx);
+    BIO_get_ssl(bio, &ssl);
+    SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
 
-        SSL_set_fd(ssl, fd);
-        SSL_set_cipher_list(ssl, name);
-        if (SSL_connect(ssl) == 1)
-        {
-            fprintf(output, "%s ", name);
-            fflush(output);
-        }
+    sprintf(name, "%s:%s", hostname, "https");
+    BIO_set_conn_hostname(bio, name);
 
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
-        close(fd);
-    }
-    fprintf(output, "\n");
+    return bio;
 }
 
-#if 0
-int print_available_tls_versions(SSL_CTX *ctx, char *domain)
+BIO *BIO_create_and_connect(SSL_CTX *ctx, char *hostname)
 {
-    int ret, fd;
-    const SSL_METHOD *(*methods[])(void) = {TLSv1_method, TLSv1_1_method, TLSv1_2_method};
+    BIO *bio = BIO_create(ctx, hostname);
 
-    for (int i = 0; i < 3; i++)
+    if (BIO_do_connect(bio) <= 0)
     {
-        fd = connect_to(domain, PORT);
-        SSL *ssl = SSL_new(ctx);
-        SSL_set_fd(ssl, fd);
-
-        SSL_set_ssl_method(ssl, methods[i]());
-        ret = SSL_connect(ssl);
-
-        printf("%s: %s\n", SSL_get_version(ssl), ret == 1 ? "available" : "not available");
-
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
-        close(fd);
+        BIO_free_all(bio);
+        return NULL;
     }
 
-    return 1;
-}
-#endif
-
-const char *get_max_tls_version(SSL_CTX *ctx, char *domain)
-{
-    int fd = connect_to(domain, PORT);
-    if (fd == -1)
-        return NULL;
-
-    const SSL_METHOD *method = TLS_client_method();
-    SSL *ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, fd);
-    int ret = SSL_connect(ssl);
-
-    if (ret != 1)
-        return NULL;
-
-    const char *version = SSL_get_version(ssl);
-    SSL_shutdown(ssl);
-
-    return version;
+    return bio;
 }
 
-void scan_init()
+SSL_CTX *ctx_create(const SSL_METHOD *method)
 {
-    SSL_load_error_strings();
-    SSL_library_init();
-
-    ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX *ctx = SSL_CTX_new(method);
     if (!ctx)
     {
         ERR_print_errors_fp(stderr);
@@ -171,41 +60,242 @@ void scan_init()
     }
 
 #ifdef TRUST_STORE
-     if (!SSL_CTX_load_verify_locations(ctx, TRUST_STORE, NULL))
+    if (!SSL_CTX_load_verify_locations(ctx, TRUST_STORE, NULL))
     {
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
     }
 #endif
 
+    return ctx;
+}
+
+void scan_init()
+{
+    SSL_load_error_strings();
+    SSL_library_init();
+
+    ctx_tls = ctx_create(TLS_client_method());
+    ctx_tlsv_1 = ctx_create(TLSv1_client_method());
+    ctx_tlsv_1_1 = ctx_create(TLSv1_1_client_method());
+    ctx_tlsv_1_2 = ctx_create(TLSv1_2_client_method());
+
     inited = 1;
 }
 
 void scan_free()
 {
-    if (ctx != NULL)
-        SSL_CTX_free(ctx);
+    if (ctx_tls != NULL)
+        SSL_CTX_free(ctx_tls);
+    if (ctx_tlsv_1 != NULL)
+        SSL_CTX_free(ctx_tlsv_1);
+    if (ctx_tlsv_1_1 != NULL)
+        SSL_CTX_free(ctx_tlsv_1_1);
+    if (ctx_tlsv_1_2 != NULL)
+        SSL_CTX_free(ctx_tlsv_1_2);
 }
 
-int scan_domain(char *domain, FILE *output)
+int get_tls_version_num(const char *tls_v)
+{
+    if (!strcmp(tls_v, "TLSv1"))
+        return 0;
+    else if (!strcmp(tls_v, "TLSv1.1"))
+        return 1;
+    else if (!strcmp(tls_v, "TLSv1.2"))
+        return 2;
+    else if (!strcmp(tls_v, "TLSv1.3"))
+        return 3;
+    else
+        return -1;
+}
+
+const char *max_tls_version(char *domain)
+{
+    BIO *bio = BIO_create_and_connect(ctx_tls, domain);
+
+    if (bio == NULL)
+        return NULL;
+
+    SSL *ssl;
+    BIO_get_ssl(bio, &ssl);
+
+    const char *version = SSL_get_version(ssl);
+    BIO_shutdown_wr(bio);
+    BIO_free_all(bio);
+
+    return version;
+}
+
+const char *min_tls_version(char *domain)
+{
+    BIO *bio = NULL;
+    SSL *ssl;
+    SSL_CTX *ctxs[] = {ctx_tlsv_1, ctx_tlsv_1_1, ctx_tlsv_1_2, ctx_tls};
+    for (int i = 0; i < 4 && bio == NULL; i++)
+        bio = BIO_create_and_connect(ctxs[i], domain);
+
+    if (bio == NULL)
+    {
+        return NULL;
+    }
+
+    BIO_get_ssl(bio, &ssl);
+    const char *min_tls = SSL_get_version(ssl);
+
+    BIO_shutdown_wr(bio);
+    BIO_free_all(bio);
+
+    return min_tls;
+}
+
+int pubkey_size(char *domain)
+{
+    BIO *bio;
+    SSL *ssl;
+    int bits;
+    X509 *cert;
+
+    bio = BIO_create_and_connect(ctx_tls, domain);
+    BIO_get_ssl(bio, &ssl);
+    cert = SSL_get_peer_certificate(ssl);
+    bits = EVP_PKEY_bits(X509_get_pubkey(cert));
+
+    X509_free(cert);
+    BIO_shutdown_wr(bio);
+    BIO_free_all(bio);
+
+    return bits;
+}
+
+strbuf_t *ciphers_for_all_tls(char *domain, strbuf_t *buf)
+{
+    if (buf == NULL)
+        buf = buf_create_size(512);
+    BIO *bio = NULL;
+    SSL *ssl = NULL;
+   
+    SSL_CTX *ctxs[4] = {ctx_tlsv_1, ctx_tlsv_1_1, ctx_tlsv_1_2, ctx_tls};
+    int checked[4] = {0, 0, 0, 0}; // v1 v1_1 v_1_2 v_1_3
+
+    for (int i = 0; i < 4; i++)
+    {
+        bio = BIO_create_and_connect(ctxs[i], domain);
+        if (bio == NULL)
+            continue;
+
+        BIO_get_ssl(bio, &ssl);
+        const char *version = SSL_get_version(ssl);
+
+        int v = get_tls_version_num(version);
+        if (checked[v] == 1)
+            continue;
+        checked[v] = 1;
+
+        buf_add(buf, "CIPHERS FOR ");
+        buf_add(buf, version);
+        buf_add(buf, ":\n");
+
+        BIO_shutdown_wr(bio);
+        BIO_free_all(bio);
+        bio = NULL;
+        ssl = NULL;
+
+        STACK_OF(SSL_CIPHER) *ciphers = SSL_CTX_get_ciphers(ctxs[i]);
+        int num = sk_SSL_CIPHER_num(ciphers);
+        const SSL_CIPHER *cipher;
+
+        for (int j = 0; j < num; j++)
+        {
+            cipher = sk_SSL_CIPHER_value(ciphers, j);
+
+            bio = BIO_create(ctxs[i], domain);
+            BIO_get_ssl(bio, &ssl);
+            SSL_set_cipher_list(ssl, SSL_CIPHER_get_name(cipher));
+
+            if (BIO_do_connect(bio) == 1)
+            {
+                buf_add(buf, "|\t");
+                buf_add(buf, SSL_CIPHER_get_name(cipher));
+                buf_add(buf, "\n");
+            }
+        
+            BIO_shutdown_wr(bio);
+            BIO_free_all(bio);
+            bio = NULL;
+            ssl = NULL;
+        }
+    }
+
+    return buf;
+}
+
+int scan_domain2(char *domain, FILE *output)
 {
     if (inited == 0)
         scan_init();
 
-    const char *max_tls_version = get_max_tls_version(ctx, domain);
+    BIO *bio = NULL;
+    SSL *ssl = NULL;
 
-    if (max_tls_version == NULL)
+    if (strstr(domain, "://") != NULL)
+        domain = strstr(domain, "://") + 3;
+
+    strbuf_t *buf = buf_create(2048);
+
+    buf_add(buf, "--------\n");
+    buf_add(buf, "HOSTNAME: ");
+    buf_add(buf, domain);
+    buf_add(buf, "\n");
+
+    // max tls version
+    const char *max_tls = max_tls_version(domain);
+    if (max_tls == NULL)
+    {
+        buf_add(buf, "TLS is not supported\n");
         return -1;
+    }
+    
+    buf_add(buf, "MAX TLS VERSION: ");
+    buf_add(buf, max_tls);
+    buf_add(buf, "\n");
 
-    int bits = get_domain_pubkey_bits(ctx, domain);
+    
+    // min tls version
 
-    fprintf(output, "-------\n");
-    fprintf(output, "HOSTNAME: %s\n", domain);
-    fprintf(output, "MAX TLS VERSION: %s\n", max_tls_version);
-    fprintf(output, "PUBLIС KEY SIZE (in bits): %d\n", bits);
-    fprintf(output, "CIPHERS:\n");
-    print_available_ciphers(ctx, domain, output);
-    fflush(output);
+    const char *min_tls = min_tls_version(domain);
+
+    if (min_tls == NULL)
+    {
+        buf_add(buf, "An error occurred\n");
+        ERR_print_errors_fp(output);
+        return -1;
+    }
+
+    buf_add(buf, "MIN TLS VERSION: ");
+    buf_add(buf, min_tls);
+    buf_add(buf, "\n");
+
+    // pubkey size
+
+    int pkey_size = pubkey_size(domain);
+    if (pkey_size == -1)
+    {
+        fprintf(output, "An error occurred\n");
+        ERR_print_errors_fp(output);
+        return -1;
+    }
+    char num[10];
+    sprintf(num, "%d", pkey_size);
+    buf_add(buf, "PUBKEY SIZE (in bits): ");
+    buf_add(buf, num);
+    buf_add(buf, "\n");
+
+    // ciphers
+
+    ciphers_for_all_tls(domain, buf);
+  
+    fprintf(output, "%s", buf -> buf);
+    buf_free(buf);
 
     return 0;
 }
