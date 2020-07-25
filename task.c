@@ -42,7 +42,7 @@ int task_read_hostnames(task_t *task, FILE *fp)
 
 
     char *line = NULL;
-    ssize_t size = 0;
+    size_t size = 0;
 
     while (getline(&line, &size, fp) != -1)
     {

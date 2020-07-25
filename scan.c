@@ -1,10 +1,6 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-#include <netdb.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-
 #include <unistd.h>
 #include <string.h>
 
@@ -18,7 +14,6 @@ static SSL_CTX *ctx_tls = NULL,
                *ctx_tlsv_1 = NULL,
                *ctx_tlsv_1_1 = NULL,
                *ctx_tlsv_1_2 = NULL;
-
 
 BIO *BIO_create(SSL_CTX *ctx, char *hostname)
 {
@@ -173,7 +168,7 @@ strbuf_t *ciphers_for_all_tls(char *domain, strbuf_t *buf)
         buf = buf_create_size(512);
     BIO *bio = NULL;
     SSL *ssl = NULL;
-   
+
     SSL_CTX *ctxs[4] = {ctx_tlsv_1, ctx_tlsv_1_1, ctx_tlsv_1_2, ctx_tls};
     int checked[4] = {0, 0, 0, 0}; // v1 v1_1 v_1_2 v_1_3
 
@@ -218,7 +213,7 @@ strbuf_t *ciphers_for_all_tls(char *domain, strbuf_t *buf)
                 buf_add(buf, SSL_CIPHER_get_name(cipher));
                 buf_add(buf, "\n");
             }
-        
+
             BIO_shutdown_wr(bio);
             BIO_free_all(bio);
             bio = NULL;
@@ -229,13 +224,10 @@ strbuf_t *ciphers_for_all_tls(char *domain, strbuf_t *buf)
     return buf;
 }
 
-int scan_domain2(char *domain, FILE *output)
+strbuf_t * scan_domain2(char *domain)
 {
     if (inited == 0)
         scan_init();
-
-    BIO *bio = NULL;
-    SSL *ssl = NULL;
 
     if (strstr(domain, "://") != NULL)
         domain = strstr(domain, "://") + 3;
@@ -252,14 +244,14 @@ int scan_domain2(char *domain, FILE *output)
     if (max_tls == NULL)
     {
         buf_add(buf, "TLS is not supported\n");
-        return -1;
+        // fprintf(output, "%s", buf->buf);
+        return buf;
     }
-    
+
     buf_add(buf, "MAX TLS VERSION: ");
     buf_add(buf, max_tls);
     buf_add(buf, "\n");
 
-    
     // min tls version
 
     const char *min_tls = min_tls_version(domain);
@@ -267,8 +259,9 @@ int scan_domain2(char *domain, FILE *output)
     if (min_tls == NULL)
     {
         buf_add(buf, "An error occurred\n");
-        ERR_print_errors_fp(output);
-        return -1;
+        // fprintf(output,"%s",  buf->buf);
+        // buf_free(buf);
+        return buf;
     }
 
     buf_add(buf, "MIN TLS VERSION: ");
@@ -280,9 +273,11 @@ int scan_domain2(char *domain, FILE *output)
     int pkey_size = pubkey_size(domain);
     if (pkey_size == -1)
     {
-        fprintf(output, "An error occurred\n");
-        ERR_print_errors_fp(output);
-        return -1;
+        buf_add(buf, "An error occurred\n");
+        // fprintf(output, "%s", buf -> buf);
+        // ERR_print_errors_fp(output);
+        // buf_free(buf);
+        return buf;
     }
     char num[10];
     sprintf(num, "%d", pkey_size);
@@ -293,9 +288,9 @@ int scan_domain2(char *domain, FILE *output)
     // ciphers
 
     ciphers_for_all_tls(domain, buf);
-  
-    fprintf(output, "%s", buf -> buf);
-    buf_free(buf);
 
-    return 0;
+    // fprintf(output, "%s", buf->buf);
+    // buf_free(buf);
+
+    return buf;
 }

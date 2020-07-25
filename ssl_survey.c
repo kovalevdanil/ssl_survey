@@ -5,8 +5,15 @@
 #include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <pthread.h>
+#include "thread_pool.h"
+
 #include "task.h"
 #include "scan.h"
+#include "strbuf.h"
+
+#define POOL_SIZE 10
 
 void usage(char *program_name)
 {
@@ -118,28 +125,53 @@ task_t *parse_args(int argc, char **argv)
     return task;
 }
 
+FILE *output;
+pthread_mutex_t output_mutex;
+
+void worker(void *args)
+{
+    char *domain = (char *)args;
+    strbuf_t *buf = scan_domain2(domain);
+
+    if (buf == NULL)
+        return;
+
+    pthread_mutex_lock(&output_mutex);
+    fprintf(output, "%s", buf -> buf);
+    pthread_mutex_unlock(&output_mutex);
+
+    buf_free(buf);
+}
+
 int main(int argc, char *argv[])
 {
     task_t *task = parse_args(argc, argv);
+
+    output = task->output;
+    pthread_mutex_init(&output_mutex, NULL);
+    tpool_t *pool = tpool_create(POOL_SIZE);
+
     scan_init();
 
-    int ret;
     for (int i = 0; i < task->count; i++)
     {
-        ret = scan_domain2(task->hostnames[i], task->output);
-        if (ret == -1)
-        {
-            continue;
-        }
+        tpool_add_work(pool, worker, task->hostnames[i]);
+        // ret = scan_domain2(task->hostnames[i], task->output);
 
-        if (task -> output != stdout)
-            print_progress(20, i + 1, task -> count);
-        else 
-            printf("[%d/%d]\n", i + 1, task -> count);
+        // if (task -> output != stdout)
+        //     print_progress(20, i + 1, task -> count);
+        // else
+        //     printf("[%d/%d]\n", i + 1, task -> count);
     }
     printf("\n");
 
+    if (output != stdout)
+        fclose(output);
+
+    tpool_destroy(pool);
+    pthread_mutex_destroy(&output_mutex);
     task_free(task);
     scan_free();
+
     return 0;
 }

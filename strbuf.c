@@ -20,6 +20,9 @@ strbuf_t *buf_create_size(int size)
 
 void buf_free(strbuf_t *buf)
 {
+    if (buf == NULL)
+        return;
+
     if (buf->buf != NULL)
         free(buf->buf);
     free(buf);
@@ -27,6 +30,9 @@ void buf_free(strbuf_t *buf)
 
 void buf_add(strbuf_t *buf, char *str)
 {
+    if (buf == NULL || str == NULL)
+        return;
+
     int str_len = strlen(str);
 
     if (buf->len + str_len + 1 >= buf->alloc_len)
