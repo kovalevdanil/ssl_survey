@@ -14,6 +14,7 @@
 #include "strbuf.h"
 
 #define POOL_SIZE 10
+#define PROGRESS_BAR_LENGTH 20
 
 void usage(char *program_name)
 {
@@ -36,11 +37,12 @@ void print_progress(size_t count, size_t num, size_t total)
     char postfix[] = "]";
 
     size_t percents = (double)num / total * 100;
-    char *bar = malloc(sizeof(char) * (count));
+    char *bar = malloc(sizeof(char) * (count + 1));
     for (int i = 0; i < count; i++)
     {
-        bar[i] = ((double)i / count) * 100 <= percents ? '#' : '.';
+        bar[i] = ((double)(i + 1) / count) * 100 <= percents ? '#' : '.';
     }
+    bar[count] = 0;
 
     printf("\r%s%s%s %ld/%ld", prefix, bar, postfix, num, total);
     fflush(stdout);
@@ -125,53 +127,113 @@ task_t *parse_args(int argc, char **argv)
     return task;
 }
 
-FILE *output;
-pthread_mutex_t output_mutex;
+typedef struct final_buffer
+{
+    strbuf_t **buffers;
+    int buf_count;
+} final_buffer_t;
+
+final_buffer_t *final_buffer_create()
+{
+    return calloc(1, sizeof(final_buffer_t));
+}
+
+void final_buffer_add(final_buffer_t *fbuf, strbuf_t *strbuf)
+{
+    fbuf->buffers = realloc(fbuf->buffers, (fbuf->buf_count) * sizeof(strbuf_t));
+    fbuf->buffers[fbuf->buf_count] = strbuf;
+    fbuf->buf_count++;
+}
+
+void final_buffer_free(final_buffer_t *buf)
+{
+    if (buf == NULL)
+        return;
+    for (int i = 0; i < buf->buf_count; i++)
+        buf_free(buf->buffers[i]);
+    free(buf);
+}
+
+void final_buffer_print(final_buffer_t *buf, FILE *output)
+{
+    for (int i = 0; i < buf->buf_count; i++)
+        fprintf(output, "%s", buf->buffers[i]->buf);
+}
+
+typedef struct worker_args
+{
+    FILE *output;
+    char *domain;
+    pthread_mutex_t *output_mutex;
+    int *progress;
+    int total;
+    final_buffer_t *final_buf;
+} worker_args_t;
+
+worker_args_t *worker_args_pack(char *domain, pthread_mutex_t *outm, int *progress, int total, final_buffer_t *fbuf)
+{
+    worker_args_t *args = malloc(sizeof(worker_args_t));
+    args->domain = domain;
+    args->output_mutex = outm;
+    args->progress = progress;
+    args->total = total;
+    args->final_buf = fbuf;
+
+    return args;
+}
 
 void worker(void *args)
 {
-    char *domain = (char *)args;
+    worker_args_t *wargs = (worker_args_t *)args;
+
+    char *domain = wargs->domain;
     strbuf_t *buf = scan_domain2(domain);
 
     if (buf == NULL)
         return;
 
-    pthread_mutex_lock(&output_mutex);
-    fprintf(output, "%s", buf -> buf);
-    pthread_mutex_unlock(&output_mutex);
+    pthread_mutex_lock(wargs->output_mutex);
+    (*(wargs->progress))++;
+    final_buffer_add(wargs->final_buf, buf);
+    print_progress(PROGRESS_BAR_LENGTH, *(wargs->progress), wargs->total);
+    pthread_mutex_unlock(wargs->output_mutex);
 
-    buf_free(buf);
+    free(args);
 }
 
 int main(int argc, char *argv[])
 {
     task_t *task = parse_args(argc, argv);
+    pthread_mutex_t output_mutex;
+    tpool_t *pool;
+    worker_args_t *wargs;
+    int progress = 0;
+    final_buffer_t *fbuf;
 
-    output = task->output;
     pthread_mutex_init(&output_mutex, NULL);
-    tpool_t *pool = tpool_create(POOL_SIZE);
+    pool = tpool_create(POOL_SIZE);
+    fbuf = final_buffer_create();
 
     scan_init();
+    print_progress(PROGRESS_BAR_LENGTH, 0, task -> count);
 
     for (int i = 0; i < task->count; i++)
     {
-        tpool_add_work(pool, worker, task->hostnames[i]);
-        // ret = scan_domain2(task->hostnames[i], task->output);
-
-        // if (task -> output != stdout)
-        //     print_progress(20, i + 1, task -> count);
-        // else
-        //     printf("[%d/%d]\n", i + 1, task -> count);
+        wargs = worker_args_pack(task->hostnames[i], &output_mutex, &progress, task->count, fbuf);
+        tpool_add_work(pool, worker, wargs);
     }
-    printf("\n");
 
-    if (output != stdout)
-        fclose(output);
-
+    tpool_wait(pool);
     tpool_destroy(pool);
+
+    final_buffer_print(fbuf, task -> output);
+
+    final_buffer_free(fbuf);
     pthread_mutex_destroy(&output_mutex);
     task_free(task);
     scan_free();
+
+ 
 
     return 0;
 }
