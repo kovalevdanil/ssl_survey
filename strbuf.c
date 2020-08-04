@@ -28,7 +28,7 @@ void buf_free(strbuf_t *buf)
     free(buf);
 }
 
-void buf_add(strbuf_t *buf, char *str)
+void buf_add(strbuf_t *buf, const char *str)
 {
     if (buf == NULL || str == NULL)
         return;

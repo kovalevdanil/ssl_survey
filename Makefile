@@ -1,26 +1,26 @@
 all: ssl_survey
 
-CC = gcc -g -Wall
-LIBS = `pkg-config --cflags --libs  openssl` -pthread
-TRUST_STORE = /etc/ssl/certs/ca-certificates.crt
+CC = gcc -g -Wall -std=c99 
+LIBS = `pkg-config --cflags --libs  openssl libuv`  
+# TRUST_STORE = /etc/ssl/certs/ca-certificates.crt
 
-ssl_survey: ssl_survey.o task.o scan.o strbuf.o thread_pool.o
-	$(CC)  $^ -o ssl_survey $(LIBS)
+SRC = $(wildcard *.c)
+OBJ = $(patsubst %.c, %.o, $(SRC))
+OUTPUT = ssl_survey
+TRUST_DEF =
+
+ifdef TRUST_STORE
+	TRUST_DEF=-DTRUST_STORE=\"$(TRUST_STORE)\"
+endif 
+
+ssl_survey: $(OBJ)
+	@$(CC) $^ -o $(OUTPUT) $(LIBS)
  
-ssl_survey.o: ssl_survey.c
-	$(CC) -c ssl_survey.c
+scan.o: scan.c 
+	@$(CC)  $(TRUST_DEF) -c scan.c
 
-task.o: task.c task.h
-	$(CC) -c task.c
-
-scan.o: scan.c scan.h
-	$(CC) -DTRUST_STORE=\"$(TRUST_STORE)\" -c scan.c
-
-strbuf.o: strbuf.c strbuf.h
-	$(CC) -c strbuf.c
-
-thread_pool.o: thread_pool.c thread_pool.h
-	$(CC) -c thread_pool.c 
+%.o: %.c
+	@$(CC) -c $< -o $@  
 
 clean:
-	rm -rf *.o
+	$(RM) $(OBJ) 

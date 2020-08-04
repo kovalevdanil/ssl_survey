@@ -11,6 +11,6 @@ typedef struct strbuf
 strbuf_t *buf_create();
 strbuf_t *buf_create_size(int size);
 void buf_free(strbuf_t *buf);
-void buf_add(strbuf_t *buf, char *str);
+void buf_add(strbuf_t *buf, const char *str);
 
 #endif

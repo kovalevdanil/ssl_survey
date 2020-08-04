@@ -7,14 +7,15 @@
 #include <string.h>
 
 #include <pthread.h>
-#include "thread_pool.h"
+#include <uv.h>
 
 #include "task.h"
 #include "scan.h"
 #include "strbuf.h"
 
-#define POOL_SIZE 10
 #define PROGRESS_BAR_LENGTH 20
+#define HIDE_CURSOR() printf("\e[?25l")
+#define SHOW_CURSOR() printf("\e[?25h")
 
 void usage(char *program_name)
 {
@@ -31,118 +32,114 @@ void failure(const char *message)
     exit(EXIT_FAILURE);
 }
 
-void print_progress(size_t count, size_t num, size_t total)
+void print_progress(size_t bar_len, size_t num, size_t total)
 {
     char prefix[] = "Progress: [";
     char postfix[] = "]";
 
     size_t percents = (double)num / total * 100;
-    char *bar = malloc(sizeof(char) * (count + 1));
-    for (int i = 0; i < count; i++)
+    char *bar = malloc(sizeof(char) * (bar_len + 1));
+    for (int i = 0; i < bar_len; i++)
     {
-        bar[i] = ((double)(i + 1) / count) * 100 <= percents ? '#' : '.';
+        bar[i] = ((double)(i + 1) / bar_len) * 100 <= percents ? '#' : '.';
     }
-    bar[count] = 0;
+    bar[bar_len] = 0;
 
     printf("\r%s%s%s %ld/%ld", prefix, bar, postfix, num, total);
     fflush(stdout);
     free(bar);
 }
 
-task_t *parse_args(int argc, char **argv)
+task_t parse_args(int argc, char **argv)
 {
-    if (argc == 1)
-    {
-        usage(argv[0]);
-        exit(EXIT_FAILURE);
-    }
+    int opt;
+    task_t task;
+    task_init(&task);
 
-    task_t *task = task_create();
-
-    for (int i = 1; i < argc; i++)
+    while ((opt = getopt(argc, argv, "f:o:")) != -1)
     {
-        if (argv[i][0] == '-')
+        switch (opt)
         {
-            if (strcmp(argv[i], "-o") == 0)
-            {
-                if (i + 1 >= argc)
-                {
-                    failure("File name should be specified");
-                }
+        case 'f':
+        {
+            FILE *fp = fopen(optarg, "r");
+            if (fp == NULL)
+                failure("Unable to open input file");
 
-                if (task->output != NULL)
-                {
-                    failure("Output should be specified once");
-                }
+            if (task_read_hostnames(&task, fp) == -1)
+                failure("Error reading hostnames");
 
-                FILE *fp = fopen(argv[i + 1], "w");
-                if (fp == NULL)
-                {
-                    failure("Invalid name of output file\n");
-                }
+            fclose(fp);
 
-                if (task_set_output(task, fp) == -1)
-                {
-                    fclose(fp);
-                    failure("An error occurred");
-                }
-                i++;
-            }
-            else if (strcmp(argv[i], "-f") == 0)
-            {
-                if (i + 1 >= argc)
-                {
-                    failure("Name of file should be specified");
-                }
+            break;
+        }
+        case 'o':
+            if (task.output != NULL)
+                failure("Input can be specified once");
 
-                FILE *fp = fopen(argv[i + 1], "r");
-                if (fp == NULL)
-                {
-                    failure("Failed opening input file");
-                }
+            task.output = fopen(optarg, "w");
+            if (task.output == NULL)
+                failure("Unable to open or create open file");
 
-                if (task_read_hostnames(task, fp) == -1)
-                    failure("An error occurred");
-                i++;
-            }
+            break;
+
+        case '?':
+            if (optopt == 'f')
+                failure("The input filename must be specified");
+            else if (optopt == 'o')
+                failure("The output filename must be specified");
             else
-            {
-                failure("Unknown flag");
-            }
-        }
-        else
-        {
-            if (task->count != 0)
-                failure("List of hosts can be specified only once");
+                failure("Unknown option character\n");
 
-            while (i < argc && argv[i][0] != '-')
-                task_add_hostname(task, argv[i++]);
-            i--;
+            break;
+
+        default:
+            failure("Unknown flag being used");
         }
     }
 
-    if (task->output == NULL)
-        task->output = stdout;
+    if (task.hostnames == NULL)
+        for (int i = optind; i < argc; i++)
+        {
+            task_add_hostname(&task, argv[i]);
+        }
+
+    if (task.output == NULL)
+        task.output = stdout;
 
     return task;
 }
+
+// --------------- final buffer ---------------
 
 typedef struct final_buffer
 {
     strbuf_t **buffers;
     int buf_count;
+    int buf_alloc;
+    pthread_mutex_t mutex;
 } final_buffer_t;
 
-final_buffer_t *final_buffer_create()
+final_buffer_t *final_buffer_create(size_t size)
 {
-    return calloc(1, sizeof(final_buffer_t));
+    final_buffer_t *fbuf = calloc(1, sizeof(final_buffer_t));
+    fbuf->buffers = calloc(size, sizeof(strbuf_t));
+    fbuf->buf_alloc = size;
+    pthread_mutex_init(&fbuf->mutex, NULL);
+    return fbuf;
 }
 
-void final_buffer_add(final_buffer_t *fbuf, strbuf_t *strbuf)
+void final_buffer_add(final_buffer_t *final_buffer, strbuf_t *buffer)
 {
-    fbuf->buffers = realloc(fbuf->buffers, (fbuf->buf_count) * sizeof(strbuf_t));
-    fbuf->buffers[fbuf->buf_count] = strbuf;
-    fbuf->buf_count++;
+    pthread_mutex_lock(&final_buffer->mutex);
+
+    if (final_buffer->buf_count < final_buffer->buf_alloc)
+    {
+        final_buffer->buffers[final_buffer->buf_count] = buffer;
+        final_buffer->buf_count++;
+    }
+
+    pthread_mutex_unlock(&final_buffer->mutex);
 }
 
 void final_buffer_free(final_buffer_t *buf)
@@ -151,6 +148,7 @@ void final_buffer_free(final_buffer_t *buf)
         return;
     for (int i = 0; i < buf->buf_count; i++)
         buf_free(buf->buffers[i]);
+    pthread_mutex_destroy(&buf->mutex);
     free(buf);
 }
 
@@ -160,80 +158,80 @@ void final_buffer_print(final_buffer_t *buf, FILE *output)
         fprintf(output, "%s", buf->buffers[i]->buf);
 }
 
-typedef struct worker_args
+// --------------- scan worker ---------------
+typedef struct
 {
-    FILE *output;
     char *domain;
-    pthread_mutex_t *output_mutex;
+    final_buffer_t *final_buffer;
     int *progress;
-    int total;
-    final_buffer_t *final_buf;
-} worker_args_t;
+    pthread_mutex_t *progress_mutex;
+} scan_context_t;
 
-worker_args_t *worker_args_pack(char *domain, pthread_mutex_t *outm, int *progress, int total, final_buffer_t *fbuf)
+scan_context_t *scan_context_create(char *domain, final_buffer_t *fbuf, int *progress, pthread_mutex_t *progress_mutex)
 {
-    worker_args_t *args = malloc(sizeof(worker_args_t));
-    args->domain = domain;
-    args->output_mutex = outm;
-    args->progress = progress;
-    args->total = total;
-    args->final_buf = fbuf;
+    scan_context_t *context = calloc(1, sizeof(scan_context_t));
+    context->domain = domain;
+    context->final_buffer = fbuf;
+    context->progress = progress;
+    context->progress_mutex = progress_mutex;
 
-    return args;
+    return context;
 }
 
-void worker(void *args)
+void scan_worker(uv_work_t *work)
 {
-    worker_args_t *wargs = (worker_args_t *)args;
+    scan_context_t *context = (scan_context_t *)work->data;
 
-    char *domain = wargs->domain;
-    strbuf_t *buf = scan_domain2(domain);
+    strbuf_t *strbuf = scan_domain(context->domain);
 
-    if (buf == NULL)
-        return;
+    final_buffer_add(context->final_buffer, strbuf);
+}
 
-    pthread_mutex_lock(wargs->output_mutex);
-    (*(wargs->progress))++;
-    final_buffer_add(wargs->final_buf, buf);
-    print_progress(PROGRESS_BAR_LENGTH, *(wargs->progress), wargs->total);
-    pthread_mutex_unlock(wargs->output_mutex);
+void scan_worker_end(uv_work_t *work, int status)
+{
+    scan_context_t *context = ((scan_context_t *)work->data);
+    pthread_mutex_t *mutex = context->progress_mutex;
+    int *progress = context->progress;
 
-    free(args);
+    pthread_mutex_lock(mutex);
+    (*progress)++;
+    print_progress(PROGRESS_BAR_LENGTH, *progress, context->final_buffer->buf_alloc);
+    pthread_mutex_unlock(mutex);
 }
 
 int main(int argc, char *argv[])
 {
-    task_t *task = parse_args(argc, argv);
-    pthread_mutex_t output_mutex;
-    tpool_t *pool;
-    worker_args_t *wargs;
+    task_t task = parse_args(argc, argv);
+
     int progress = 0;
-    final_buffer_t *fbuf;
+    pthread_mutex_t progress_mutex;
+    pthread_mutex_init(&progress_mutex, NULL);
 
-    pthread_mutex_init(&output_mutex, NULL);
-    pool = tpool_create(POOL_SIZE);
-    fbuf = final_buffer_create();
+    final_buffer_t *final_buffer = final_buffer_create(task.count);
 
-    scan_init();
-    print_progress(PROGRESS_BAR_LENGTH, 0, task -> count);
+    uv_loop_t *loop = uv_default_loop();
+    uv_work_t *req = calloc(task.count, sizeof(uv_work_t));
 
-    for (int i = 0; i < task->count; i++)
+    HIDE_CURSOR();
+    print_progress(PROGRESS_BAR_LENGTH, 0, task.count);
+
+    for (int i = 0; i < task.count; i++)
     {
-        wargs = worker_args_pack(task->hostnames[i], &output_mutex, &progress, task->count, fbuf);
-        tpool_add_work(pool, worker, wargs);
+        req[i].data = scan_context_create(task.hostnames[i], final_buffer, &progress, &progress_mutex);
+        uv_queue_work(loop, &req[i], scan_worker, scan_worker_end);
     }
 
-    tpool_wait(pool);
-    tpool_destroy(pool);
+    uv_run(loop, UV_RUN_DEFAULT);
 
-    final_buffer_print(fbuf, task -> output);
+    SHOW_CURSOR();
+    printf("\n");
+    final_buffer_print(final_buffer, task.output);
 
-    final_buffer_free(fbuf);
-    pthread_mutex_destroy(&output_mutex);
-    task_free(task);
-    scan_free();
-
- 
+    final_buffer_free(final_buffer);
+    for (int i = 0; i < task.count; i++)
+        free(req[i].data);
+    free(req);
+    uv_loop_delete(loop);
 
     return 0;
 }
