@@ -21,9 +21,9 @@ void usage(char *program_name)
 {
     printf("Usage: %s (list<hosts> | -f FILENAME) [-o FILENAME]...\n", program_name);
     printf("where\n"
-           "\tlist<hosts> ::= hostname [...]\n"
-           "\t-o FILENAME\t\tto specify output file\n"
-           "\t-f FILENAME\t\tto specify input file\n");
+        "\tlist<hosts> ::= hostname [...]\n"
+        "\t-o FILENAME\t\tto specify output file\n"
+        "\t-f FILENAME\t\tto specify input file\n");
 }
 
 void failure(const char *message)
@@ -99,10 +99,13 @@ task_t parse_args(int argc, char **argv)
     }
 
     if (task.hostnames == NULL)
+    {
+        task_alloc(&task, argc - optind);
         for (int i = optind; i < argc; i++)
         {
             task_add_hostname(&task, argv[i]);
         }
+    }
 
     if (task.output == NULL)
         task.output = stdout;

@@ -1,5 +1,5 @@
-#ifndef _STRBUF_H
-#define _STRBUF_H
+#ifndef __STRBUF_H
+#define __STRBUF_H
 
 typedef struct strbuf
 {
@@ -14,3 +14,4 @@ void buf_free(strbuf_t *buf);
 void buf_add(strbuf_t *buf, const char *str);
 
 #endif
+
