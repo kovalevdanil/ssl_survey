@@ -86,7 +86,7 @@ void check_protocol_versions(SSL_CTX **contexts, int *available_proto, char *dom
 int min_proto(int *available_proto);
 int max_proto(int *available_proto);
 int pubkey_len(SSL_CTX *ctx, char *domain);
-int check_all_ciphers(SSL_CTX **contexts, int *available_proto, char *domain, strbuf_t *strbuf);
+void check_all_ciphers(SSL_CTX **contexts, int *available_proto, char *domain, strbuf_t *strbuf);
 
 strbuf_t *scan_domain(char *domain)
 {
@@ -129,7 +129,7 @@ strbuf_t *scan_domain(char *domain)
     buf_add(strbuf, buf);
 
     // checking all available ciphers for every tls version
-    check_all_ciphers(contexts, available_proto, domain, buf);
+    check_all_ciphers(contexts, available_proto, domain, strbuf);
 
     end:
     for (int i = 0; i < PROTO_COUNT; i++)
@@ -165,24 +165,6 @@ void check_protocol_versions(SSL_CTX **contexts, int *available_proto, char *dom
         BIO_free_all(bio);
         bio = NULL;
     }
-}
-
-int min_max_protocols(int *available_proto, int *min, int *max)
-{
-    int min_ind = 0, max_ind = PROTO_COUNT - 1;
-    while (min_ind < PROTO_COUNT && available_proto[min_ind] == 0)
-        min_ind++;
-
-    while (max_ind > 0 && available_proto[max_ind] == 0)
-        max_ind--;
-
-    if (min_ind == PROTO_COUNT)
-    {
-        return -1;
-    }
-
-    *min = min_ind;
-    *max = max_ind;
 }
 
 int min_proto(int *available_proto)
@@ -221,7 +203,7 @@ int pubkey_len(SSL_CTX *ctx, char *domain)
     return bits;
 }
 
-int check_all_ciphers(SSL_CTX **contexts, int *available_proto, char *domain, strbuf_t *strbuf)
+void check_all_ciphers(SSL_CTX **contexts, int *available_proto, char *domain, strbuf_t *strbuf)
 {
     BIO *bio;
     SSL *ssl;
